@@ -4,7 +4,7 @@ import fitz  # PyMuPDF
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QSlider, QSpinBox, QToolBar, 
                              QAction, QFileDialog, QColorDialog, QMessageBox,
-                             QWidget, QSplitter, QListWidget, QTextEdit)
+                             QWidget, QSplitter, QListWidget, QTextEdit, QScrollArea)
 from PyQt5.QtCore import Qt, QPoint, QRect
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QFont, QIcon
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
@@ -25,6 +25,7 @@ class PDFViewer(QMainWindow):
         self.pen_color = QColor(255, 0, 0)
         self.pen_width = 3
         self.text_annotations = []
+        self.original_pixmap = None
         
         self.initUI()
         
@@ -145,12 +146,32 @@ class PDFViewer(QMainWindow):
         
         main_layout.addLayout(nav_layout)
         
-        # PDF display area
+        # PDF display area with fixed size
+        self.pdf_display_widget = QWidget()
+        self.pdf_display_layout = QVBoxLayout(self.pdf_display_widget)
+        self.pdf_display_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Scroll area для фиксированного размера области просмотра
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setMinimumSize(800, 600)
+        self.scroll_area.setStyleSheet("border: 1px solid gray;")
+        
+        # Контейнер для изображения PDF
+        self.pdf_container = QWidget()
+        self.pdf_container_layout = QVBoxLayout(self.pdf_container)
+        self.pdf_container_layout.setAlignment(Qt.AlignCenter)
+        
         self.pdf_label = QLabel()
         self.pdf_label.setAlignment(Qt.AlignCenter)
-        self.pdf_label.setStyleSheet("border: 1px solid gray;")
         self.pdf_label.setMinimumSize(400, 600)
-        main_layout.addWidget(self.pdf_label)
+        self.pdf_label.setStyleSheet("background-color: white;")
+        
+        self.pdf_container_layout.addWidget(self.pdf_label)
+        self.scroll_area.setWidget(self.pdf_container)
+        
+        self.pdf_display_layout.addWidget(self.scroll_area)
+        main_layout.addWidget(self.pdf_display_widget)
         
         # Text input for text annotations
         self.text_input = QTextEdit()
@@ -292,30 +313,60 @@ class PDFViewer(QMainWindow):
             image = QImage()
             image.loadFromData(img_data)
             
-            pixmap = QPixmap.fromImage(image)
+            # Сохраняем оригинальное изображение для масштабирования
+            self.original_pixmap = QPixmap.fromImage(image)
             
-            # Create a painter to draw annotations
-            painter = QPainter(pixmap)
+            # Создаем QPixmap с фиксированным размером контейнера
+            container_size = self.scroll_area.viewport().size()
+            scaled_pixmap = self.original_pixmap.scaled(
+                container_size, 
+                Qt.KeepAspectRatio, 
+                Qt.SmoothTransformation
+            )
+            
+            # Создаем временный pixmap для рисования аннотаций
+            temp_pixmap = QPixmap(scaled_pixmap.size())
+            temp_pixmap.fill(Qt.white)
+            
+            painter = QPainter(temp_pixmap)
+            
+            # Рисуем масштабированное изображение PDF
+            painter.drawPixmap(0, 0, scaled_pixmap)
+            
+            # Масштабируем координаты аннотаций
+            scale_x = scaled_pixmap.width() / self.original_pixmap.width()
+            scale_y = scaled_pixmap.height() / self.original_pixmap.height()
             
             # Draw pencil annotations
             for annotation in self.annotations:
                 if annotation['page'] == self.current_page and annotation['type'] == 'pencil':
-                    pen = QPen(annotation['color'], annotation['width'])
+                    pen = QPen(annotation['color'], annotation['width'] * min(scale_x, scale_y))
                     painter.setPen(pen)
-                    for i in range(1, len(annotation['points'])):
-                        painter.drawLine(annotation['points'][i-1], annotation['points'][i])
+                    
+                    scaled_points = []
+                    for point in annotation['points']:
+                        scaled_point = QPoint(int(point.x() * scale_x), int(point.y() * scale_y))
+                        scaled_points.append(scaled_point)
+                    
+                    for i in range(1, len(scaled_points)):
+                        painter.drawLine(scaled_points[i-1], scaled_points[i])
             
             # Draw text annotations
             for text_ann in self.text_annotations:
                 if text_ann['page'] == self.current_page:
-                    font = QFont("Arial", 12)
+                    font = QFont("Arial", 12 * min(scale_x, scale_y))
                     painter.setFont(font)
                     painter.setPen(QPen(text_ann['color']))
-                    painter.drawText(text_ann['position'], text_ann['text'])
+                    
+                    scaled_position = QPoint(
+                        int(text_ann['position'].x() * scale_x),
+                        int(text_ann['position'].y() * scale_y)
+                    )
+                    painter.drawText(scaled_position, text_ann['text'])
             
             painter.end()
             
-            self.pdf_label.setPixmap(pixmap)
+            self.pdf_label.setPixmap(temp_pixmap)
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not display page: {str(e)}")
@@ -399,39 +450,59 @@ class PDFViewer(QMainWindow):
         for text_ann in page_texts:
             self.annotations_list.addItem(f"Text: {text_ann['text'][:30]}...")
     
+    def get_scaled_point(self, pos):
+        """Преобразует координаты мыши в координаты оригинального изображения"""
+        if not self.original_pixmap or not self.pdf_label.pixmap():
+            return QPoint()
+            
+        label_pixmap = self.pdf_label.pixmap()
+        if not label_pixmap:
+            return QPoint()
+            
+        # Получаем геометрию изображения внутри label
+        label_rect = self.pdf_label.rect()
+        pixmap_rect = label_pixmap.rect()
+        
+        # Вычисляем отступы для центрирования
+        x_offset = (label_rect.width() - pixmap_rect.width()) // 2
+        y_offset = (label_rect.height() - pixmap_rect.height()) // 2
+        
+        # Корректируем позицию относительно изображения
+        adjusted_pos = QPoint(pos.x() - x_offset, pos.y() - y_offset)
+        
+        # Масштабируем обратно к оригинальному размеру
+        if pixmap_rect.width() > 0 and pixmap_rect.height() > 0:
+            scale_x = self.original_pixmap.width() / pixmap_rect.width()
+            scale_y = self.original_pixmap.height() / pixmap_rect.height()
+            
+            original_x = int(adjusted_pos.x() * scale_x)
+            original_y = int(adjusted_pos.y() * scale_y)
+            
+            return QPoint(original_x, original_y)
+        
+        return QPoint()
+    
     def mousePressEvent(self, event):
         if (event.button() == Qt.LeftButton and self.pdf_label.underMouse() and 
-            self.doc and self.current_tool in ["pencil", "text"]):
+            self.doc and self.current_tool in ["pencil", "text"] and self.original_pixmap):
             
             pos = self.pdf_label.mapFrom(self, event.pos())
-            
-            # Проверяем, что есть pixmap для работы
-            if not self.pdf_label.pixmap():
-                return
-                
-            pixmap_rect = self.pdf_label.pixmap().rect()
-            label_rect = self.pdf_label.rect()
-            
-            # Calculate the offset to center the pixmap
-            x_offset = (label_rect.width() - pixmap_rect.width()) // 2
-            y_offset = (label_rect.height() - pixmap_rect.height()) // 2
-            
-            # Adjust position relative to the pixmap
-            adjusted_pos = QPoint(pos.x() - x_offset, pos.y() - y_offset)
+            original_pos = self.get_scaled_point(pos)
             
             # Проверяем, что клик внутри изображения
-            if not pixmap_rect.contains(adjusted_pos):
+            original_rect = self.original_pixmap.rect()
+            if not original_rect.contains(original_pos):
                 return
             
             if self.current_tool == "pencil":
                 self.drawing = True
-                self.last_point = adjusted_pos
+                self.last_point = original_pos
                 self.annotations.append({
                     'type': 'pencil',
                     'page': self.current_page,
                     'color': self.pen_color,
                     'width': self.pen_width,
-                    'points': [adjusted_pos]
+                    'points': [original_pos]
                 })
             
             elif self.current_tool == "text":
@@ -442,7 +513,7 @@ class PDFViewer(QMainWindow):
                         'page': self.current_page,
                         'text': text,
                         'color': self.pen_color,
-                        'position': adjusted_pos
+                        'position': original_pos
                     })
                     self.text_input.clear()
                     self.display_page()
@@ -451,30 +522,31 @@ class PDFViewer(QMainWindow):
     def mouseMoveEvent(self, event):
         if (event.buttons() & Qt.LeftButton and self.drawing and 
             self.current_tool == "pencil" and self.pdf_label.underMouse() and
-            self.pdf_label.pixmap()):
+            self.original_pixmap):
             
             pos = self.pdf_label.mapFrom(self, event.pos())
-            pixmap_rect = self.pdf_label.pixmap().rect()
-            label_rect = self.pdf_label.rect()
-            
-            x_offset = (label_rect.width() - pixmap_rect.width()) // 2
-            y_offset = (label_rect.height() - pixmap_rect.height()) // 2
-            
-            adjusted_pos = QPoint(pos.x() - x_offset, pos.y() - y_offset)
+            original_pos = self.get_scaled_point(pos)
             
             # Проверяем, что движение внутри изображения
-            if not pixmap_rect.contains(adjusted_pos):
+            original_rect = self.original_pixmap.rect()
+            if not original_rect.contains(original_pos):
                 return
             
             if self.annotations:
-                self.annotations[-1]['points'].append(adjusted_pos)
-                self.last_point = adjusted_pos
+                self.annotations[-1]['points'].append(original_pos)
+                self.last_point = original_pos
                 self.display_page()
     
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.drawing:
             self.drawing = False
             self.update_annotations_list()
+    
+    def resizeEvent(self, event):
+        """Перерисовываем страницу при изменении размера окна"""
+        super().resizeEvent(event)
+        if self.doc:
+            self.display_page()
     
     def print_file(self):
         if not self.doc:
@@ -485,8 +557,6 @@ class PDFViewer(QMainWindow):
         dialog = QPrintDialog(printer, self)
         
         if dialog.exec_() == QPrintDialog.Accepted:
-            # This is a simplified print implementation
-            # In a real application, you would render each page to the printer
             QMessageBox.information(self, "Print", "Print functionality would be implemented here.")
 
 
