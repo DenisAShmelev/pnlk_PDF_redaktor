@@ -13,7 +13,7 @@ from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
 class PDFViewer(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.initUI()
+        # Инициализируем атрибуты перед вызовом initUI
         self.current_file = None
         self.doc = None
         self.current_page = 0
@@ -25,6 +25,8 @@ class PDFViewer(QMainWindow):
         self.pen_color = QColor(255, 0, 0)
         self.pen_width = 3
         self.text_annotations = []
+        
+        self.initUI()
         
     def initUI(self):
         self.setWindowTitle("PDF Viewer with Annotations")
@@ -275,7 +277,7 @@ class PDFViewer(QMainWindow):
         # to the PDF pages based on the drawings and text
         
         # This is a placeholder for the annotation logic
-        pass
+        print("Applying annotations to PDF...")
     
     def display_page(self):
         if not self.doc:
@@ -348,7 +350,8 @@ class PDFViewer(QMainWindow):
     def zoom_changed(self, value):
         self.zoom_factor = value / 100.0
         self.zoom_label.setText(f"{value}%")
-        self.display_page()
+        if self.doc:
+            self.display_page()
     
     def zoom_in(self):
         current_value = self.zoom_slider.value()
@@ -401,6 +404,11 @@ class PDFViewer(QMainWindow):
             self.doc and self.current_tool in ["pencil", "text"]):
             
             pos = self.pdf_label.mapFrom(self, event.pos())
+            
+            # Проверяем, что есть pixmap для работы
+            if not self.pdf_label.pixmap():
+                return
+                
             pixmap_rect = self.pdf_label.pixmap().rect()
             label_rect = self.pdf_label.rect()
             
@@ -410,6 +418,10 @@ class PDFViewer(QMainWindow):
             
             # Adjust position relative to the pixmap
             adjusted_pos = QPoint(pos.x() - x_offset, pos.y() - y_offset)
+            
+            # Проверяем, что клик внутри изображения
+            if not pixmap_rect.contains(adjusted_pos):
+                return
             
             if self.current_tool == "pencil":
                 self.drawing = True
@@ -438,7 +450,8 @@ class PDFViewer(QMainWindow):
     
     def mouseMoveEvent(self, event):
         if (event.buttons() & Qt.LeftButton and self.drawing and 
-            self.current_tool == "pencil" and self.pdf_label.underMouse()):
+            self.current_tool == "pencil" and self.pdf_label.underMouse() and
+            self.pdf_label.pixmap()):
             
             pos = self.pdf_label.mapFrom(self, event.pos())
             pixmap_rect = self.pdf_label.pixmap().rect()
@@ -448,6 +461,10 @@ class PDFViewer(QMainWindow):
             y_offset = (label_rect.height() - pixmap_rect.height()) // 2
             
             adjusted_pos = QPoint(pos.x() - x_offset, pos.y() - y_offset)
+            
+            # Проверяем, что движение внутри изображения
+            if not pixmap_rect.contains(adjusted_pos):
+                return
             
             if self.annotations:
                 self.annotations[-1]['points'].append(adjusted_pos)
