@@ -3,7 +3,7 @@ import os
 import fitz  # PyMuPDF
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QLabel, QSlider, QFileDialog,
-                             QLineEdit, QToolBar, QStatusBar, QMessageBox)
+                             QLineEdit, QToolBar, QStatusBar, QMessageBox, QComboBox)
 from PyQt5.QtCore import Qt, QRectF
 from PyQt5.QtGui import QPixmap, QImage, QPainter, QWheelEvent, QMouseEvent
 from PyQt5.QtPrintSupport import QPrintDialog, QPrinter
@@ -24,7 +24,7 @@ class PDFViewer(QMainWindow):
         self.initUI()
         
     def initUI(self):
-        self.setWindowTitle('PDF Viewer - 30 лет опыта в действии!')
+        self.setWindowTitle('PDF Viewer')
         self.setGeometry(100, 100, 1200, 800)
         
         # Центральный виджет
@@ -71,6 +71,13 @@ class PDFViewer(QMainWindow):
         self.page_label = QLabel('Страница: 0/0')
         toolbar.addWidget(self.page_label)
         
+        # Выпадающий список для перехода на страницу
+        self.page_combo = QComboBox()
+        self.page_combo.setMinimumWidth(80)
+        self.page_combo.currentIndexChanged.connect(self.goToPage)
+        toolbar.addWidget(QLabel('Перейти:'))
+        toolbar.addWidget(self.page_combo)
+        
         next_btn = QPushButton('След. →')
         next_btn.clicked.connect(self.nextPage)
         toolbar.addWidget(next_btn)
@@ -102,6 +109,21 @@ class PDFViewer(QMainWindow):
         reset_btn.clicked.connect(self.resetView)
         toolbar.addWidget(reset_btn)
         
+    def updatePageComboBox(self):
+        """Обновляет выпадающий список страниц"""
+        self.page_combo.clear()
+        if self.pdf_document:
+            for i in range(self.total_pages):
+                self.page_combo.addItem(f"Стр. {i+1}")
+    
+    def goToPage(self, index):
+        """Переходит на выбранную страницу"""
+        if self.pdf_document and index >= 0 and index != self.current_page:
+            self.current_page = index
+            self.pan_offset = [0, 0]  # Сбрасываем панорамирование при смене страницы
+            self.updateDisplay()
+            self.updateStatusBar()
+    
     def openFile(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Открыть PDF файл", "", "PDF Files (*.pdf)")
@@ -119,6 +141,8 @@ class PDFViewer(QMainWindow):
                 self.pan_offset = [0, 0]
                 self.zoom_slider.setValue(100)
                 
+                # Обновляем выпадающий список страниц
+                self.updatePageComboBox()
                 self.updateDisplay()
                 self.updateStatusBar()
                 
@@ -152,6 +176,7 @@ class PDFViewer(QMainWindow):
     def prevPage(self):
         if self.pdf_document and self.current_page > 0:
             self.current_page -= 1
+            self.page_combo.setCurrentIndex(self.current_page)  # Обновляем комбобокс
             self.pan_offset = [0, 0]  # Сбрасываем панорамирование при смене страницы
             self.updateDisplay()
             self.updateStatusBar()
@@ -159,6 +184,7 @@ class PDFViewer(QMainWindow):
     def nextPage(self):
         if self.pdf_document and self.current_page < self.total_pages - 1:
             self.current_page += 1
+            self.page_combo.setCurrentIndex(self.current_page)  # Обновляем комбобокс
             self.pan_offset = [0, 0]  # Сбрасываем панорамирование при смене страницы
             self.updateDisplay()
             self.updateStatusBar()
